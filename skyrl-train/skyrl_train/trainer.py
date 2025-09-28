@@ -240,7 +240,7 @@ class RayPPOTrainer:
 
                     # 3. calculate advantages and returns
                     with Timer("compute_advantages_and_returns", self.all_timings):
-                        training_input = self.compute_advantages_and_returns(training_input)
+                        training_input = self.compute_advantages_and_returns(training_input, generator_output)
                         # remove some unwanted keys
                         for key in ["custom_rewards", "rm_rewards"]:
                             training_input.pop(key)
@@ -679,7 +679,7 @@ class RayPPOTrainer:
         return generator_output
 
     @torch.no_grad()
-    def compute_advantages_and_returns(self, data: TrainingInputBatch) -> TrainingInputBatch:
+    def compute_advantages_and_returns(self, data: TrainingInputBatch, generator_output: GeneratorOutput) -> TrainingInputBatch:
         """Calculate advantages and returns for the data batch.
 
         Expects:
@@ -697,9 +697,59 @@ class RayPPOTrainer:
         """
         # TODO (erictang000): we are just supporting custom rewards for now
         token_level_rewards = data["custom_rewards"]
+        action_log_probs = data["action_log_probs"]
+        loss_mask = data["loss_mask"]
+        response_mask = data["response_mask"]
+        percept_rewards = torch.zeros_like(token_level_rewards)
+
+        # Add mean observation perplexity to the final token of each response turn using loss_mask transitions
+        batch_percept_rewards = []
+        for b in range(loss_mask.shape[0]):
+            loss_row = loss_mask[b]
+            log_probs_row = action_log_probs[b]
+            response_mask_row = response_mask[b]
+
+            last_response_idx: Optional[int] = None
+            i = 0
+            seq_len = loss_row.shape[0]
+
+            while i < seq_len:
+                if loss_row[i].item() > 0 or response_mask_row[i].item() == 0:
+                    last_response_idx = i
+                    i += 1
+                    continue
+
+                obs_start = i
+                while i < seq_len and loss_row[i].item() <= 0:
+                    i += 1
+                obs_end = i
+
+                if last_response_idx is None:
+                    continue
+
+                chunk_log_probs = log_probs_row[obs_start:obs_end]
+                if chunk_log_probs.numel() == 0:
+                    continue
+
+                reward_logprob_unnormalized = -chunk_log_probs.mean()
+                batch_percept_rewards.append(reward_logprob_unnormalized)
+                percept_rewards[b, last_response_idx] += reward_logprob_unnormalized
+                last_response_idx = None
+
+        # sequence level mean and std across batch to normalize the percept rewards
+        if len(batch_percept_rewards) > 0:
+            batch_percept_rewards = torch.stack(batch_percept_rewards)
+            batch_mean_percept_rewards = batch_percept_rewards.mean()
+            batch_std_percept_rewards = batch_percept_rewards.std()
+            normalization_mask = percept_rewards != 0
+            # normalize the percept rewards where it is non-zero
+            percept_rewards[normalization_mask] = (percept_rewards[normalization_mask] - batch_mean_percept_rewards) / (batch_std_percept_rewards + 1e-8)
+        
+        token_percept_rewards = token_level_rewards + percept_rewards
+        
 
         advantages, returns = ppo_utils.compute_advantages_and_returns(
-            token_level_rewards=token_level_rewards,
+            token_level_rewards=token_percept_rewards,
             response_mask=data["response_mask"],
             index=data.metadata["uids"],
             adv_estimator=self.cfg.trainer.algorithm.advantage_estimator,
@@ -714,6 +764,11 @@ class RayPPOTrainer:
 
         return_sums = token_level_rewards.sum(dim=-1)
         avg_rewards: float = return_sums.mean().item()
+        percept_return_sums = percept_rewards.sum(dim=-1)
+        # NOTE: (kanishkg): ideally we should divide by num turns but we want to have a direct comparison with rewards
+        # if len(batch_percept_rewards) > 0:
+        #     percept_return_sums = percept_return_sums / len(batch_percept_rewards)
+        avg_percept_rewards: float = percept_return_sums.mean().item()
 
         avg_response_length = data.metadata["avg_response_length"]
         data = data.to("cpu")
@@ -730,6 +785,7 @@ class RayPPOTrainer:
                 "avg_response_length": avg_response_length,
                 "avg_advantages": avg_advantages,
                 "avg_advantages_abs": avg_advantages_abs,
+                "avg_percept_rewards": avg_percept_rewards,
             }
         )
 
@@ -879,6 +935,7 @@ class RayPPOTrainer:
         # NOTE (sumanthrh): The slicing is needed to make sure that the batch dimension doesn't change for the tensordict.
         rewards = rewards[: len(sequences_all)] if rewards is not None else None
         base_log_probs = base_log_probs[: len(sequences_all)] if base_log_probs is not None else None
+        # NOTE (kanishkg): These are logprobs for the full sequence, not just the response tokens.
         action_log_probs = action_log_probs[: len(sequences_all)]
         values = values[: len(sequences_all)] if values is not None else None
 
