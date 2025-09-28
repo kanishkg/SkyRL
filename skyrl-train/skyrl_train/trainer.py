@@ -745,6 +745,8 @@ class RayPPOTrainer:
             # normalize the percept rewards where it is non-zero
             percept_rewards[normalization_mask] = (percept_rewards[normalization_mask] - batch_mean_percept_rewards) / (batch_std_percept_rewards + 1e-8)
         
+        # percept rewards no grad, so detach
+        percept_rewards = percept_rewards.detach()
         token_percept_rewards = token_level_rewards + percept_rewards
         
 
