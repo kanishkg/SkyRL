@@ -770,7 +770,7 @@ class RayPPOTrainer:
         # NOTE: (kanishkg): ideally we should divide by num turns but we want to have a direct comparison with rewards
         # if len(batch_percept_rewards) > 0:
         #     percept_return_sums = percept_return_sums / len(batch_percept_rewards)
-        avg_percept_rewards: float = percept_return_sums.mean().item()
+        avg_percept_rewards: float = percept_return_sums.abs().mean().item()
 
         avg_response_length = data.metadata["avg_response_length"]
         data = data.to("cpu")
@@ -787,7 +787,7 @@ class RayPPOTrainer:
                 "avg_response_length": avg_response_length,
                 "avg_advantages": avg_advantages,
                 "avg_advantages_abs": avg_advantages_abs,
-                "avg_percept_rewards": avg_percept_rewards,
+                "avg_percept_rewards": batch_percept_rewards.mean().item(),
             }
         )
 
@@ -797,7 +797,7 @@ class RayPPOTrainer:
                 "loss/avg_raw_rewards": avg_rewards,
                 "loss/avg_raw_advantages": avg_advantages,
                 "loss/avg_raw_advantages_abs": avg_advantages_abs,
-                "loss/avg_percept_rewards": avg_percept_rewards,
+                "loss/avg_percept_rewards": batch_percept_rewards.mean().item(),
             }
         )
         return data
