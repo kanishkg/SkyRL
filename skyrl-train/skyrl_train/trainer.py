@@ -740,29 +740,23 @@ class RayPPOTrainer:
                 last_response_idx = None
             num_turns_per_seq.append(num_turns)
 
-        # Normalize by number of turns first to get average per-turn rewards per sequence
-        avg_percept_rewards_per_seq = []
+        
+                # Normalize the raw rewards
+        if len(batch_percept_rewards) > 0:
+            batch_percept_rewards = torch.tensor(batch_percept_rewards)
+            batch_mean_percept_rewards = batch_percept_rewards.mean()
+            batch_std_percept_rewards = batch_percept_rewards.std()
+            normalization_mask = percept_rewards != 0
+            percept_rewards[normalization_mask] = (percept_rewards[normalization_mask] - batch_mean_percept_rewards) / (batch_std_percept_rewards + 1e-8)
+
+        # Normalize by number of turns to get average per-turn rewards per sequence
         for b in range(percept_rewards.shape[0]):
             if num_turns_per_seq[b] > 0:
                 percept_rewards[b] = percept_rewards[b] / num_turns_per_seq[b]
-                # Collect the non-zero averaged values for computing statistics
-                nonzero_mask = percept_rewards[b] != 0
-                if nonzero_mask.any():
-                    avg_percept_rewards_per_seq.extend(percept_rewards[b][nonzero_mask].tolist())
 
-        # Compute mean and std from the averaged per-sequence rewards
-        if len(avg_percept_rewards_per_seq) > 0:
-            avg_percept_rewards_per_seq = torch.tensor(avg_percept_rewards_per_seq)
-            batch_mean_percept_rewards = avg_percept_rewards_per_seq.mean()
-            batch_std_percept_rewards = avg_percept_rewards_per_seq.std()
-            
-            normalization_mask = percept_rewards != 0
-            # normalize the percept rewards where it is non-zero
-            percept_rewards[normalization_mask] = (percept_rewards[normalization_mask] - batch_mean_percept_rewards) / (batch_std_percept_rewards + 1e-8)
-        
         # percept rewards no grad, so detach
         percept_rewards = percept_rewards.detach()
-        token_percept_rewards = token_level_rewards + percept_rewards
+        token_percept_rewards = token_level_rewards + 0.1 * percept_rewards
         
 
         advantages, returns = ppo_utils.compute_advantages_and_returns(
