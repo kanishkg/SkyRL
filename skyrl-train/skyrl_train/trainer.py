@@ -803,7 +803,7 @@ class RayPPOTrainer:
                 "avg_response_length": avg_response_length,
                 "avg_advantages": avg_advantages,
                 "avg_advantages_abs": avg_advantages_abs,
-                "avg_percept_rewards": batch_mean_percept_rewards,
+                "avg_percept_rewards": batch_mean_percept_rewards.item(),
                 "avg_percept_advantages_abs": avg_percept_advantages_abs,
                 "avg_percept_advantages": avg_percept_advantages,
             }
@@ -815,7 +815,7 @@ class RayPPOTrainer:
                 "loss/avg_raw_rewards": avg_rewards,
                 "loss/avg_raw_advantages": avg_advantages,
                 "loss/avg_raw_advantages_abs": avg_advantages_abs,
-                "loss/avg_percept_rewards": batch_mean_percept_rewards,
+                "loss/avg_percept_rewards": batch_mean_percept_rewards.item(),
                 "loss/avg_percept_advantages_abs": avg_percept_advantages_abs,
                 "loss/avg_percept_advantages": avg_percept_advantages,
             }
