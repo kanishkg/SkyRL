@@ -704,6 +704,7 @@ class RayPPOTrainer:
 
         # Add mean observation perplexity to the final token of each response turn using loss_mask transitions
         batch_percept_rewards = []
+        num_turns_per_seq = []
         for b in range(loss_mask.shape[0]):
             loss_row = loss_mask[b]
             log_probs_row = action_log_probs[b]
@@ -713,6 +714,7 @@ class RayPPOTrainer:
             i = 0
             seq_len = loss_row.shape[0]
 
+            num_turns = 0
             while i < seq_len:
                 if loss_row[i].item() > 0 or response_mask_row[i].item() == 0:
                     last_response_idx = i
@@ -723,6 +725,7 @@ class RayPPOTrainer:
                 while i < seq_len and loss_row[i].item() <= 0:
                     i += 1
                 obs_end = i
+                num_turns += 1
 
                 if last_response_idx is None:
                     continue
@@ -735,12 +738,24 @@ class RayPPOTrainer:
                 batch_percept_rewards.append(reward_logprob_unnormalized)
                 percept_rewards[b, last_response_idx] += reward_logprob_unnormalized
                 last_response_idx = None
+            num_turns_per_seq.append(num_turns)
 
-        # sequence level mean and std across batch to normalize the percept rewards
-        if len(batch_percept_rewards) > 0:
-            batch_percept_rewards = torch.stack(batch_percept_rewards)
-            batch_mean_percept_rewards = batch_percept_rewards.mean()
-            batch_std_percept_rewards = batch_percept_rewards.std()
+        # Normalize by number of turns first to get average per-turn rewards per sequence
+        avg_percept_rewards_per_seq = []
+        for b in range(percept_rewards.shape[0]):
+            if num_turns_per_seq[b] > 0:
+                percept_rewards[b] = percept_rewards[b] / num_turns_per_seq[b]
+                # Collect the non-zero averaged values for computing statistics
+                nonzero_mask = percept_rewards[b] != 0
+                if nonzero_mask.any():
+                    avg_percept_rewards_per_seq.extend(percept_rewards[b][nonzero_mask].tolist())
+
+        # Compute mean and std from the averaged per-sequence rewards
+        if len(avg_percept_rewards_per_seq) > 0:
+            avg_percept_rewards_per_seq = torch.tensor(avg_percept_rewards_per_seq)
+            batch_mean_percept_rewards = avg_percept_rewards_per_seq.mean()
+            batch_std_percept_rewards = avg_percept_rewards_per_seq.std()
+            
             normalization_mask = percept_rewards != 0
             # normalize the percept rewards where it is non-zero
             percept_rewards[normalization_mask] = (percept_rewards[normalization_mask] - batch_mean_percept_rewards) / (batch_std_percept_rewards + 1e-8)
