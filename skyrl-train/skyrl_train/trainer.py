@@ -734,7 +734,7 @@ class RayPPOTrainer:
                 if chunk_log_probs.numel() == 0:
                     continue
 
-                reward_logprob_unnormalized = -chunk_log_probs.mean()
+                reward_logprob_unnormalized = chunk_log_probs.mean()
                 batch_percept_rewards.append(reward_logprob_unnormalized)
                 percept_rewards[b, last_response_idx] += reward_logprob_unnormalized
                 last_response_idx = None
