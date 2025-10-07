@@ -756,7 +756,7 @@ class RayPPOTrainer:
 
         # percept rewards no grad, so detach
         percept_rewards = percept_rewards.detach()
-        token_percept_rewards = token_level_rewards + 0.1 * percept_rewards
+        token_percept_rewards = token_level_rewards + 1.0 * percept_rewards
         
 
         advantages, returns = ppo_utils.compute_advantages_and_returns(
