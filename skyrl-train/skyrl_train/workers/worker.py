@@ -735,6 +735,26 @@ class PolicyWorkerBase(Worker):
             )
             # loss function
             # TODO: recompute advantages
+            # compute env observation logprobs
+            # compute env observation logprobs (auxiliary loss to predict observations)
+            action_mask = experience.action_mask
+            if action_mask is not None and self.cfg.trainer.algorithm.get("obs_prediction_coef", 0.0) > 0:
+                # Create observation mask: where loss_mask <= 0 and action_mask > 0
+                # These are tokens that are observations (not trained on) but part of response
+                obs_mask = (loss_mask <= 0)
+                
+                if obs_mask.sum() > 0:
+                    # Extract log probs for observation tokens (NOT detached - gradients will flow!)
+                    obs_log_probs = action_log_probs * obs_mask.float()
+                    
+                    # Compute negative log likelihood as auxiliary loss
+                    # We want to maximize log probs, so minimize negative log probs
+                    obs_prediction_loss = -(obs_log_probs.sum() / obs_mask.sum())
+                else:
+                    obs_prediction_loss = torch.tensor(0.0, device=action_log_probs.device)
+            else:
+                obs_prediction_loss = torch.tensor(0.0, device=action_log_probs.device)
+
             policy_loss, clip_ratio = self.policy_loss_fn(
                 action_log_probs,
                 old_action_log_probs,
@@ -767,7 +787,15 @@ class PolicyWorkerBase(Worker):
         else:
             kl_loss = torch.tensor(0.0)
 
-        loss = policy_loss + kl_loss * self.cfg.trainer.algorithm.kl_loss_coef
+        # loss = policy_loss + kl_loss * self.cfg.trainer.algorithm.kl_loss_coef
+
+        # New line 772 with observation prediction loss:
+        obs_prediction_coef = self.cfg.trainer.algorithm.get("obs_prediction_coef", 0.0)
+        loss = (
+            policy_loss 
+            + kl_loss * self.cfg.trainer.algorithm.kl_loss_coef
+            + obs_prediction_loss * obs_prediction_coef
+        )
         loss = loss / accumulation_steps
         self.strategy.backward(loss, self.model, self.optimizer)
 
@@ -787,6 +815,9 @@ class PolicyWorkerBase(Worker):
             "ppo_clip_ratio": clip_ratio,
             "policy_entropy": entropy,
         }
+        # Add this:
+        if obs_prediction_coef > 0:
+            status["obs_prediction_loss"] = obs_prediction_loss.item()
         if self.cfg.trainer.algorithm.use_kl_loss:
             status["policy_kl"] = kl_loss.item()
 
